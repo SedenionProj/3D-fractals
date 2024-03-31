@@ -1,0 +1,3 @@
+[submodule "3D_fractals/vendor/OpenGL"]
+	path = 3D_fractals/vendor/OpenGL
+	url = git@github.com:SedenionProj/OpenGL_startup_project.git
