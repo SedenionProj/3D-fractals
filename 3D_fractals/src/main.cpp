@@ -1,63 +1,43 @@
 #include <seden.h>
-
+#include <vector>
 void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window);
 
-const char* vert = R"(#version 330
-
-layout(location = 0) in vec3 aPos;
-
-uniform mat4 viewProjection;
-
-out vec3 pos;
-
-void main()
+GLuint createSSBO(const std::vector<glm::vec4>& varray)
 {
-	pos = aPos;
-	gl_Position = viewProjection * vec4(aPos, 1);
+	GLuint ssbo;
+	glGenBuffers(1, &ssbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, varray.size() * sizeof(*varray.data()), varray.data(), GL_STATIC_DRAW);
+	return ssbo;
 }
-)";
 
-const char* frag = R"(#version 330
-
-out vec4 fragPos;
-
-in vec3 pos;
-
-void main()
-{
-	fragPos = vec4(1, 0, 0, 1);
-}
-)";
+const int width = 1280;
+const int height = 720;
 
 int main() {
-	Seden::win::init(1920, 1080, "projName");
+	Seden::win::init(1280, 720, "projName");
 	Seden::win::initGui();
 
-	Shader sh = Shader();
-	sh.createShader(vert, frag);
+	Shader sh = Shader("assets/fractalVert.glsl", "assets/fractalFrag.glsl");
+
+	std::vector<glm::vec4> colBuf(width * height, glm::vec4(0.5));
+	GLuint ssbo = createSSBO(colBuf);
 
 	float aspect = 16 / 9.f;
 
 	Seden::PerspectiveCamera cam(aspect);
 
-	float vertices[] = {
-		 -0.5, -0.5,  0,
-		 -0.5,  0.5,  0,
-		  0.5, -0.5,  0
-	};
 	GLuint triangleVAO, triangleVBO;
 	glGenVertexArrays(1, &triangleVAO);
 	glBindVertexArray(triangleVAO);
 
-	glGenBuffers(1, &triangleVBO);
-	glBindBuffer(GL_ARRAY_BUFFER, triangleVBO);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-	glEnableVertexAttribArray(0);
-
 	float var1 = 1;
+
+	int frame = 0;
 	while (Seden::win::isRunning()) {
+		frame++;
+		glm::vec3 oldRot = cam.getFront();
+		glm::vec3 oldPos = cam.getPosition();
 		processInput(cam, Seden::win::getWindowRef());
 		Seden::win::clear();
 		Seden::win::clearGui();
@@ -70,11 +50,20 @@ int main() {
 		ImGui::SliderFloat("var1", &var1, 0, 10);
 		ImGui::End();
 
-
+		// render
 		sh.Bind();
-		sh.setMat4("viewProjection", cam.getProjectionMatrix() * cam.getViewMatrix());
+		sh.setVec3("rayOrigin", cam.getPosition());
+		sh.setVec3("rayDirection", cam.getFront());
+		sh.setInt("frame", frame);
+		if (cam.getPosition() != oldPos || oldRot != cam.getFront()) {
+			sh.setBool("moved", true);
+		}
+		else {
+			sh.setBool("moved", false);
+		};
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
 		glBindVertexArray(triangleVAO);
-		glDrawArrays(GL_TRIANGLES, 0, 3);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
 
 		Seden::win::drawGui();
 		Seden::win::display();
@@ -95,18 +84,18 @@ void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window)
 	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
 		camera.moveFront(-cameraSpeed);
 	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-		camera.moveRight(-cameraSpeed);
-	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
 		camera.moveRight(cameraSpeed);
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+		camera.moveRight(-cameraSpeed);
 	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
 		camera.moveUp(cameraSpeed);
 	if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
 		camera.moveUp(-cameraSpeed);
 
 	if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
-		camera.rotate(0.0, -sensitivity);
-	if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
 		camera.rotate(0.0, sensitivity);
+	if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
+		camera.rotate(0.0, -sensitivity);
 	if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
 		camera.rotate(sensitivity, 0.0);
 	if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
