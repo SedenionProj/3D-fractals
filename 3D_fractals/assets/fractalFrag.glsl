@@ -8,13 +8,50 @@ layout(std430, binding = 0) buffer _colBuff
 out vec4 FragCol;
 
 #define MAX_STEP 255
-#define MIN_DIST 0.01
+#define MIN_DIST 0.001
 #define MAX_DIST 100.
+#define MAX_BOUNCE 5
 
-uniform vec3 rayOrigin;
-uniform vec3 rayDirection;
+#define MAX_FLOAT 9999999.
+
+uniform int select_fractal;
+uniform int select_renderer;
+
 uniform bool moved;
 uniform int frame;
+
+const uint MANDELBULB = 0;
+const uint MANDELBOX = 1;
+const uint SIERPINSKI = 2;
+const uint MENGER = 3;
+
+const uint PATH_TRACING = 0;
+const uint BLINN_PHONG = 1;
+const uint PREVIEW = 2;
+
+struct Camera{
+    vec3 origin;
+    vec3 direction;
+};
+uniform Camera camera;
+
+struct FractalProperties {
+    int maxIterations;
+};  
+uniform FractalProperties fractalProperties;
+
+struct HitRecord{
+    vec3 position;
+    vec3 normal;
+    vec3 color;
+};
+
+struct Ray{
+    vec3 origin;
+    vec3 direction;
+};
+
+// hash
 
 float g_seed = 0.;
 
@@ -30,6 +67,12 @@ vec2 hash2(inout float seed) {
     return vec2(rz.xy & uvec2(0x7fffffffU))/float(0x7fffffff);
 }
 
+vec3 hash3(inout float seed) {
+    uint n = base_hash(floatBitsToUint(vec2(seed+=.1,seed+=.1)));
+    uvec3 rz = uvec3(n, n*16807U, n*48271U);
+    return vec3(rz & uvec3(0x7fffffffU))/float(0x7fffffff);
+}
+
 vec2 random_in_unit_disk(inout float seed) {
     vec2 h = hash2(seed) * vec2(1.,6.28318530718);
     float phi = h.y;
@@ -37,133 +80,157 @@ vec2 random_in_unit_disk(inout float seed) {
 	return r * vec2(sin(phi),cos(phi));
 }
 
-struct Ray{
-    vec3 origin;
-    vec3 direction;
-};
-
-mat3 rotateX(float theta) {
-    float c = cos(theta);
-    float s = sin(theta);
-    return mat3(
-        vec3(1, 0, 0),
-        vec3(0, c, -s),
-        vec3(0, s, c)
-    );
-}
-
-mat3 rotateY(float theta) {
-    float c = cos(theta);
-    float s = sin(theta);
-    return mat3(
-        vec3(c, 0, s),
-        vec3(0, 1, 0),
-        vec3(-s, 0, c)
-    );
+vec3 random_in_unit_sphere(inout float seed) {
+    vec3 h = hash3(seed) * vec3(2.,6.28318530718,1.)-vec3(1,0,0);
+    float phi = h.y;
+    float r = pow(h.z, 1./3.);
+	return r * vec3(sqrt(1.-h.x*h.x)*vec2(sin(phi),cos(phi)),h.x);
 }
 
 
-float smin(float a, float b, float k) {
-  float h = clamp(0.5+0.5*(b-a)/k, 0.0, 1.0);
-  return mix(b, a, h) - k*h*(1.0-h);
+
+// sdf
+
+float sdMandelbulb(vec3 pos, float power, inout float t0) {
+	vec3 z = pos;
+	float dr = 1.0;
+	float r = 0.0;
+    t0 = 1.0;
+	for (int i = 0; i < fractalProperties.maxIterations ; i++) {
+		r = length(z);
+		if(r > 1.5) break;
+		
+		// convert to polar coordinates
+		float theta = acos(z.z/r);
+		float phi = atan(z.y,z.x);
+		dr =  pow( r, power-1.0)*power*dr + 1.0;
+		
+		// scale and rotate the point
+		float r = pow( r,power);
+		theta = theta*power;
+		phi = phi*power;
+		
+		// convert back to cartesian coordinates
+		z = r*vec3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta))+pos;
+        
+        t0 = min(t0, r);
+	}
+	return 0.5*log(r)*r/dr;
+}
+float sdSphere(vec3 p, float r){
+    float displacement = sin(5.0 * p.x) * sin(5.0 * p.y) * sin(5.0 * p.z) * 0.00;
+    return length(p) - r + displacement;
 }
 
-float sdRoundBox( vec3 p, vec3 b, float r )
-{
-  vec3 q = abs(p) - b;
-  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
+float sdPlane(vec3 p, float h){
+    return p.y-h;
 }
 
-float sdPyramid( vec3 p, float h )
-{
-  float m2 = h*h + 0.25;
-    
-  p.xz = abs(p.xz);
-  p.xz = (p.z>p.x) ? p.zx : p.xz;
-  p.xz -= 0.5;
+float sdScene(vec3 p, inout float t0){
+    float power = 8.0;
+    float h = MAX_FLOAT;
 
-  vec3 q = vec3( p.z, h*p.y - 0.5*p.x, h*p.x + 0.5*p.y);
-   
-  float s = max(-q.x,0.0);
-  float t = clamp( (q.y-0.5*p.z)/(m2+0.25), 0.0, 1.0 );
-    
-  float a = m2*(q.x+s)*(q.x+s) + q.y*q.y;
-  float b = m2*(q.x+0.5*t)*(q.x+0.5*t) + (q.y-m2*t)*(q.y-m2*t);
-    
-  float d2 = min(q.y,-q.x*m2-q.y*0.5) > 0.0 ? 0.0 : min(a,b);
-    
-  return sqrt( (d2+q.z*q.z)/m2 ) * sign(max(q.z,-p.y));
-}
-
-float sdPlane( vec3 p, float h )
-{
-  return p.y-h;
-}  
-
-float sdSphere(vec3 p, float r)
-{
-    return length(p)-r;
-}
-
-float sdf(vec3 p)
-{
-    float d = min(sdSphere(p,1.),sdPlane(p,-1.));
-    d = min(d,sdRoundBox(p-vec3(4,0,0),vec3(1,1,1),0.1));
-    d = min(d,sdPyramid(p-vec3(-4,-1,0),3.));
-    return d;
-}
-
-float AmbientOcclusion(vec3 p, vec3 normal, float step_dist, float step_nbr)
-{
-    float occlusion = 1.f;
-    while(step_nbr > 0.0)
-    {
-	occlusion -= pow(step_nbr * step_dist - (sdf( p + normal * step_nbr * step_dist)),2.) / step_nbr;
-	step_nbr--;
+    switch (select_fractal){
+    case MANDELBULB:
+        h=min(h,sdMandelbulb(p, power, t0));
+        break;
+    case MANDELBOX:
+        h=min(h,sdSphere(p+vec3(0,0,1), 0.5));
+        break;
     }
-
-    return occlusion;
+    return h;
+    //return min(sdMandelbulb(p,  maxIterations, bailout, power, t0),sdPlane(p, -1.));
 }
 
 vec3 calcNormal(in vec3 p) {
-    vec2 e = vec2(1.0, -1.0) * 0.0005;
+    vec2 e = vec2(1.0, -1.0) * 0.000005;
+    float tmp;
     return normalize(
-      e.xyy * sdf(p + e.xyy) +
-      e.yyx * sdf(p + e.yyx) +
-      e.yxy * sdf(p + e.yxy) +
-      e.xxx * sdf(p + e.xxx));
+      e.xyy * sdScene(p + e.xyy,tmp) +
+      e.yyx * sdScene(p + e.yyx,tmp) +
+      e.yxy * sdScene(p + e.yxy,tmp) +
+      e.xxx * sdScene(p + e.xxx,tmp));
 }
 
-float rayMarch(vec3 origin, vec3 direction) {
-	float totalDistance = 0.0;
-	for (int i = 0; i < MAX_STEP; i++)
-    {
-		vec3 p = origin + totalDistance * direction;
-		float distance = sdf(p);
-		totalDistance += distance;
-		if (abs(distance) < MIN_DIST || totalDistance > MAX_DIST) break;
-	}
-	return totalDistance;
+vec3 getSkyColor(vec3 direction){
+    vec3 dir = normalize(direction);
+    vec3 sunDir = normalize(vec3(1,1,1));
+    float v = max(0.,dot(dir, sunDir));
+    // background
+    vec3 color = mix(vec3(0.4,0.7,1),vec3(0.7,0.9,1), direction.y);
+    // sun bloom
+    color += vec3(v)*0.2;
+    // sun
+    color += pow(v,400.);
+    return color;
 }
 
-float softShadow(vec3 ro,vec3 rd, float mint, float maxt, float w )
-{
-    float res = 1.0;
-    float t = mint;
-    for( int i=0; i<256 && t<maxt; i++ )
-    {
-        float h = sdf(ro + t*rd);
-        res = min( res, h/(w*t) );
-        t += clamp(h, 0.005, 0.50);
-        if( res<-1.0 || t>maxt ) break;
+bool rayMarch(Ray ray, inout HitRecord hit){
+    float totalDistance = 0.;
+    int i;
+    vec3 p;
+    float t0;
+    for(i=0; i<MAX_STEP; i++){
+        p = ray.origin + totalDistance*ray.direction;
+        float currentDistance = sdScene(p, t0);
+        totalDistance += currentDistance;
+        
+        if(currentDistance < MIN_DIST || totalDistance > MAX_DIST){
+            break;
+        }
     }
-    res = max(res,-1.0);
-    return 0.25*(1.0+res)*(1.0+res)*(2.0-res);
+    
+    if(totalDistance>MAX_DIST){
+        return false;
+    }
+    p = ray.origin + totalDistance*ray.direction;
+    hit.position = ray.origin + 0.99*totalDistance*ray.direction;
+    hit.normal = calcNormal(p);
+    hit.color =  0.5 + 0.5 * sin(5.5 + 2.6 * t0 + vec3(1., 0.0, 1.0));
+    return true;
+}
+
+
+
+vec3 pathTrace(Ray ray){
+    vec3 backgroundColor = vec3(0.8,0.9,1.);
+    Ray currentRay = ray;
+    HitRecord hit;
+    vec3 attenuation  = vec3(1);
+    
+    for(int i = 0; i<MAX_BOUNCE; i++){
+        if(!rayMarch(currentRay, hit)){
+            return attenuation*getSkyColor(currentRay.direction); //texture(iChannel0, -currentRay.direction).rgb;
+        }
+        currentRay.origin = hit.position;
+        currentRay.direction = hit.normal+random_in_unit_sphere(g_seed);
+        //attenuation *= vec3(1.+hit.normal)*0.5;
+        attenuation *= hit.color;
+    }
+    return vec3(0);
+}
+
+vec3 blinnPhong(Ray ray){
+    HitRecord hit;
+    vec3 color = vec3(0);
+    vec3 lightDirection = normalize(vec3(1,1,1));
+    if(rayMarch(ray, hit)){
+        float ambient = 0.01;
+        float diffuse = max(dot(hit.normal, lightDirection),0.)*0.5;
+        vec3 halfwayDir = normalize(lightDirection + (ray.origin - hit.position));  
+        float spec = pow(max(dot(hit.normal, halfwayDir), 0.0), 32.0);
+        color = (ambient+diffuse)*hit.color + spec;
+    }
+    return color;
+}
+
+vec3 preview(Ray ray){
+    return vec3(0);
 }
 
 Ray getRay(vec2 uv, vec3 origin, vec3 direction){
-    float defocusAngle =  3.;
-    float focusDistance = distance(origin, direction);
+    float defocusAngle =  0.;
+    float focusDistance = distance(origin, direction)*0.2;
     
     float vfov = 90.; //vertical field of view
     
@@ -184,43 +251,35 @@ Ray getRay(vec2 uv, vec3 origin, vec3 direction){
 
 }
 
+
+
 void main(){
 	vec2 uv = 2.*gl_FragCoord.xy/1280.-1.;
     g_seed = float(base_hash(floatBitsToUint(gl_FragCoord.xy)))/float(0xffffffffU) + frame;
     int pixelIndex = int(gl_FragCoord.x+1280.*gl_FragCoord.y);
 
-    vec3 lightPosition = vec3(5., 5., 1.0);
-    vec3 color = vec3(0);
+    vec3 color = vec3(0,0,0);
     
+    Ray ray = getRay(uv, camera.origin, camera.direction);
     
-    Ray ray = getRay(uv, rayOrigin, rayDirection);
-    
-    float dist = rayMarch(ray.origin,ray.direction); // Ray march
-    
-    if(dist > MAX_DIST){
-        color = vec3(0); // Couleur arrière plan
+    switch (select_renderer){
+    case PATH_TRACING:
+        color += pathTrace(ray);
+        break;
+    case BLINN_PHONG:
+        color += blinnPhong(ray);
+        break;
+    case PREVIEW:
+        color += preview(ray);
+        break;
     }
-    else{
-        vec3 p = ray.origin + dist * ray.direction; // position objet touché
-        vec3 normal = calcNormal(p);
-        vec3 lightDirection = normalize(lightPosition - p);
-        
-        float ambiant = 0.1;
-        float diffuse = max(dot(normal, lightDirection),0.)*0.5;
-        float specular = pow(max(dot(reflect(-lightDirection,normal),normalize(rayOrigin-p)),0.), 50.);
     
-        float light = ambiant+diffuse+specular;
-        
-        float ambOccl = clamp(pow(AmbientOcclusion(p,normal,0.015,20.),32.),0.1,1.);
-        float sh = clamp(softShadow(p, lightDirection, 0.02, 20.5, 0.5), 0.1, 1.);
-        
-        color = vec3(1)*light*ambOccl*sh;
-    }
-    color = pow(color, vec3(1.0/2.2)); // Gamma correction
+
+    //color = pow(color, vec3(1.0/2.2)); // Gamma correction
     if(moved)
-        colBuff[pixelIndex] = vec4(color, 1);
+        colBuff[pixelIndex] =  vec4(color, 1);
     else
         colBuff[pixelIndex] += vec4(color, 1);
     
-    FragCol = vec4(colBuff[pixelIndex].xyz/colBuff[pixelIndex].w,1.0); // couleur finale	
+    FragCol = vec4(pow(colBuff[pixelIndex].xyz/colBuff[pixelIndex].w, vec3(1.0/2.2)),1.0); // couleur finale	
 }
