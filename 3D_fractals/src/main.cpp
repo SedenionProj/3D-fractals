@@ -54,8 +54,18 @@ int main() {
 
 	int select_renderer = BLINN_PHONG;
 	int select_fractal = MANDELBULB;
+	bool itemChanged = false;
 
 	int maxIterations = 10;
+
+
+	float vfov = 90;
+	float defocusAngle = 0;
+	float focusDistance = 1;
+
+	int maxIter = 255;
+	float minDist = 0.001f;
+	float maxDist = 100.f;
 
 	while (Seden::win::isRunning()) {
 		frame++;
@@ -65,7 +75,13 @@ int main() {
 		Seden::win::clear();
 		Seden::win::clearGui();
 
+		// GUI
 		ImGui::Begin("Hello, world!", &my_tool_active, ImGuiWindowFlags_MenuBar);
+		if (glfwGetMouseButton(Seden::win::getWindowRef(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && ImGui::IsAnyItemHovered()) {
+			itemChanged = true;
+		}
+		else itemChanged = false;
+
 		if (ImGui::BeginMenuBar())
 		{
 			if (ImGui::BeginMenu("renderer")) {
@@ -84,59 +100,80 @@ int main() {
 			ImGui::EndMenuBar();
 		
 		}
-		ImGui::Text("camera");
-		ImGui::Text(("pos : " + std::to_string(oldPos.x) + " " + std::to_string(oldPos.y) + " " + std::to_string(oldPos.z)).c_str());
-		ImGui::Text(("rot : " + std::to_string(oldRot.x) +" " + std::to_string(oldRot.y) + " " + std::to_string(oldRot.z)).c_str());
-
-		ImGui::Text("Renderer options");
-		switch (select_renderer)
-		{
-		case PATH_TRACING:
-			ImGui::Text("path tracing");
-			break;
-		case BLINN_PHONG:
-			ImGui::Text("blinn phong");
-			break;
-		case PREVIEW:
-			ImGui::Text("preview");
-			break;
-		default:
-			break;
+		// camera
+		if (ImGui::CollapsingHeader("camera")) {
+			ImGui::Text(("pos : " + std::to_string(oldPos.x) + " " + std::to_string(oldPos.y) + " " + std::to_string(oldPos.z)).c_str());
+			ImGui::Text(("rot : " + std::to_string(oldRot.x) + " " + std::to_string(oldRot.y) + " " + std::to_string(oldRot.z)).c_str());
+			ImGui::SliderFloat("vertical FOV", &vfov, 0, 180);
+			ImGui::SliderFloat("defocus angle", &defocusAngle, 0, 20);
+			ImGui::SliderFloat("focus distance", &focusDistance, 0, 3, "%.10f");
 		}
-
-		ImGui::Text("Fractal options");
-		ImGui::SliderInt("max iterations", &maxIterations,0,100);
-		switch (select_fractal)
-		{
-		case MANDELBULB:
-			ImGui::Text("mandelbulb");
-			break;
-		case MANDELBOX:
-			ImGui::Text("mandelbox");
-			break;
-		case SIERPINSKI:
-			ImGui::Text("sierpinski");
-			break;
-		case MENGER:
-			ImGui::Text("menger");
-			break;
-		default:
-			break;
+		
+		
+		// Renderer options
+		if (ImGui::CollapsingHeader("Renderer options")) {
+			ImGui::SeparatorText("Ray marching");
+			ImGui::SliderInt("maximum iterations", &maxIter, 0, 255);
+			ImGui::SliderFloat("minimum distance", &minDist, .0f, .001f,"%.10f");
+			ImGui::SliderFloat("maximum distance", &maxDist, 10, 1000);
+			switch (select_renderer)
+			{
+			case PATH_TRACING:
+				ImGui::SeparatorText("path tracing");
+				break;
+			case BLINN_PHONG:
+				ImGui::SeparatorText("blinn phong");
+				break;
+			case PREVIEW:
+				ImGui::SeparatorText("preview");
+				break;
+			default:
+				break;
+			}
+		}
+		// Fractal options
+		if (ImGui::CollapsingHeader("Fractal options")) {
+			ImGui::SliderInt("maximum iterations2", &maxIterations, 0, 100);
+			switch (select_fractal)
+			{
+			case MANDELBULB:
+				ImGui::SeparatorText("mandelbulb");
+				break;
+			case MANDELBOX:
+				ImGui::SeparatorText("mandelbox");
+				break;
+			case SIERPINSKI:
+				ImGui::SeparatorText("sierpinski");
+				break;
+			case MENGER:
+				ImGui::SeparatorText("menger");
+				break;
+			default:
+				break;
+			}
 		}
 		ImGui::End();
 
-
 		// render
 		sh.Bind();
-		sh.setVec3("camera.origin", cam.getPosition());
-		sh.setVec3("camera.direction", cam.getFront());
+		
 		sh.setInt("frame", frame);
 		sh.setInt("select_fractal", select_fractal);
 		sh.setInt("select_renderer", select_renderer);
 
+		sh.setVec3("camera.origin", cam.getPosition());
+		sh.setVec3("camera.direction", cam.getFront());
+		sh.setFloat("camera.vfov", vfov);
+		sh.setFloat("camera.defocusAngle", defocusAngle);
+		sh.setFloat("camera.focusDistance", focusDistance);
+
+		sh.setInt("rendererProprieties.maxIterations", maxIter);
+		sh.setFloat("rendererProprieties.minDist", minDist);
+		sh.setFloat("rendererProprieties.maxDist", maxDist);
+
 		sh.setInt("fractalProperties.maxIterations", maxIterations);
 
-		if (cam.getPosition() != oldPos || oldRot != cam.getFront()) {
+		if (cam.getPosition() != oldPos || oldRot != cam.getFront() || itemChanged) {
 			sh.setBool("moved", true);
 		}
 		else {

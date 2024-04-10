@@ -7,9 +7,6 @@ layout(std430, binding = 0) buffer _colBuff
 
 out vec4 FragCol;
 
-#define MAX_STEP 255
-#define MIN_DIST 0.001
-#define MAX_DIST 100.
 #define MAX_BOUNCE 5
 
 #define MAX_FLOAT 9999999.
@@ -32,11 +29,23 @@ const uint PREVIEW = 2;
 struct Camera{
     vec3 origin;
     vec3 direction;
+    float vfov;
+    float defocusAngle;
+    float focusDistance;
 };
 uniform Camera camera;
 
+struct RendererProprieties{
+    int maxIterations;
+    float minDist;
+    float maxDist;
+};
+uniform RendererProprieties rendererProprieties;
+
+
 struct FractalProperties {
     int maxIterations;
+    
 };  
 uniform FractalProperties fractalProperties;
 
@@ -117,6 +126,7 @@ float sdMandelbulb(vec3 pos, float power, inout float t0) {
 	}
 	return 0.5*log(r)*r/dr;
 }
+
 float sdSphere(vec3 p, float r){
     float displacement = sin(5.0 * p.x) * sin(5.0 * p.y) * sin(5.0 * p.z) * 0.00;
     return length(p) - r + displacement;
@@ -139,7 +149,6 @@ float sdScene(vec3 p, inout float t0){
         break;
     }
     return h;
-    //return min(sdMandelbulb(p,  maxIterations, bailout, power, t0),sdPlane(p, -1.));
 }
 
 vec3 calcNormal(in vec3 p) {
@@ -170,17 +179,17 @@ bool rayMarch(Ray ray, inout HitRecord hit){
     int i;
     vec3 p;
     float t0;
-    for(i=0; i<MAX_STEP; i++){
+    for(i=0; i<rendererProprieties.maxIterations; i++){
         p = ray.origin + totalDistance*ray.direction;
         float currentDistance = sdScene(p, t0);
         totalDistance += currentDistance;
         
-        if(currentDistance < MIN_DIST || totalDistance > MAX_DIST){
+        if(currentDistance < rendererProprieties.minDist || totalDistance > rendererProprieties.maxDist){
             break;
         }
     }
     
-    if(totalDistance>MAX_DIST){
+    if(totalDistance>rendererProprieties.maxDist){
         return false;
     }
     p = ray.origin + totalDistance*ray.direction;
@@ -225,14 +234,19 @@ vec3 blinnPhong(Ray ray){
 }
 
 vec3 preview(Ray ray){
-    return vec3(0);
+    HitRecord hit;
+    vec3 color = vec3(0);
+    if(rayMarch(ray, hit)){
+        color = vec3(1.+hit.normal)*0.5;
+    }
+    return color;
 }
 
 Ray getRay(vec2 uv, vec3 origin, vec3 direction){
-    float defocusAngle =  0.;
-    float focusDistance = distance(origin, direction)*0.2;
+    float defocusAngle =  camera.defocusAngle;
+    float focusDistance = camera.focusDistance;
     
-    float vfov = 90.; //vertical field of view
+    float vfov = camera.vfov; //vertical field of view
     
     float h = focusDistance * tan(radians(vfov)/2.); // half of vertical sensor size
     
