@@ -14,6 +14,32 @@ GLuint createSSBO(const std::vector<glm::vec4>& varray)
 const int width = 1280;
 const int height = 720;
 
+struct Camera {
+	//glm::vec3 origin;
+	//glm::vec3 direction;
+	float vfov;
+	float defocusAngle;
+	float focusDistance;
+};
+Camera camera;
+
+struct RendererOptions {
+	int maxIterations;
+	float minDist;
+	float maxDist;
+};
+RendererOptions rendererOptions;
+
+
+struct FractalOptions {
+	int maxIterations;
+
+	glm::vec3 color;
+	float frequency;
+	float shift;
+};
+FractalOptions fractalOptions;
+
 int main() {
 	Seden::win::init(1280, 720, "projName");
 	Seden::win::initGui();
@@ -56,16 +82,20 @@ int main() {
 	int select_fractal = MANDELBULB;
 	bool itemChanged = false;
 
-	int maxIterations = 10;
+	
 
+	camera.vfov = 90;
+	camera.defocusAngle = 0;
+	camera.focusDistance = 1;
 
-	float vfov = 90;
-	float defocusAngle = 0;
-	float focusDistance = 1;
+	rendererOptions.maxIterations = 255;
+	rendererOptions.minDist = 0.001f;
+	rendererOptions.maxDist = 100.f;
 
-	int maxIter = 255;
-	float minDist = 0.001f;
-	float maxDist = 100.f;
+	fractalOptions.maxIterations = 10;
+	fractalOptions.color = glm::vec3(1);
+	fractalOptions.frequency = 0.;
+	fractalOptions.shift = 0.;
 
 	while (Seden::win::isRunning()) {
 		frame++;
@@ -104,18 +134,18 @@ int main() {
 		if (ImGui::CollapsingHeader("camera")) {
 			ImGui::Text(("pos : " + std::to_string(oldPos.x) + " " + std::to_string(oldPos.y) + " " + std::to_string(oldPos.z)).c_str());
 			ImGui::Text(("rot : " + std::to_string(oldRot.x) + " " + std::to_string(oldRot.y) + " " + std::to_string(oldRot.z)).c_str());
-			ImGui::SliderFloat("vertical FOV", &vfov, 0, 180);
-			ImGui::SliderFloat("defocus angle", &defocusAngle, 0, 20);
-			ImGui::SliderFloat("focus distance", &focusDistance, 0, 3, "%.10f");
+			ImGui::SliderFloat("vertical FOV", &camera.vfov, 0, 180);
+			ImGui::SliderFloat("defocus angle", &camera.defocusAngle, 0, 20);
+			ImGui::SliderFloat("focus distance", &camera.focusDistance, 0, 3, "%.10f");
 		}
 		
 		
 		// Renderer options
 		if (ImGui::CollapsingHeader("Renderer options")) {
 			ImGui::SeparatorText("Ray marching");
-			ImGui::SliderInt("maximum iterations", &maxIter, 0, 255);
-			ImGui::SliderFloat("minimum distance", &minDist, .0f, .001f,"%.10f");
-			ImGui::SliderFloat("maximum distance", &maxDist, 10, 1000);
+			ImGui::SliderInt("maximum iterations", &rendererOptions.maxIterations, 0, 255);
+			ImGui::SliderFloat("minimum distance", &rendererOptions.minDist, .0f, .001f,"%.10f");
+			ImGui::SliderFloat("maximum distance", &rendererOptions.maxDist, 10, 1000);
 			switch (select_renderer)
 			{
 			case PATH_TRACING:
@@ -133,7 +163,10 @@ int main() {
 		}
 		// Fractal options
 		if (ImGui::CollapsingHeader("Fractal options")) {
-			ImGui::SliderInt("maximum iterations2", &maxIterations, 0, 100);
+			ImGui::SliderInt("maximum iterations2", &fractalOptions.maxIterations, 0, 100);
+			ImGui::ColorEdit3("Color", value_ptr(fractalOptions.color));
+			ImGui::SliderFloat("frequency", &fractalOptions.frequency, .0f, 50.f, "%.5f");
+			ImGui::SliderFloat("shift", &fractalOptions.shift, .0f, 50.f, "%.5f");
 			switch (select_fractal)
 			{
 			case MANDELBULB:
@@ -153,7 +186,6 @@ int main() {
 			}
 		}
 		ImGui::End();
-
 		// render
 		sh.Bind();
 		
@@ -163,15 +195,18 @@ int main() {
 
 		sh.setVec3("camera.origin", cam.getPosition());
 		sh.setVec3("camera.direction", cam.getFront());
-		sh.setFloat("camera.vfov", vfov);
-		sh.setFloat("camera.defocusAngle", defocusAngle);
-		sh.setFloat("camera.focusDistance", focusDistance);
+		sh.setFloat("camera.vfov", camera.vfov);
+		sh.setFloat("camera.defocusAngle", camera.defocusAngle);
+		sh.setFloat("camera.focusDistance", camera.focusDistance);
 
-		sh.setInt("rendererProprieties.maxIterations", maxIter);
-		sh.setFloat("rendererProprieties.minDist", minDist);
-		sh.setFloat("rendererProprieties.maxDist", maxDist);
+		sh.setInt("rendererOptions.maxIterations",rendererOptions.maxIterations);
+		sh.setFloat("rendererOptions.minDist", rendererOptions.minDist);
+		sh.setFloat("rendererOptions.maxDist", rendererOptions.maxDist);
 
-		sh.setInt("fractalProperties.maxIterations", maxIterations);
+		sh.setInt("fractalOptions.maxIterations", fractalOptions.maxIterations);
+		sh.setVec3("fractalOptions.color", fractalOptions.color);
+		sh.setFloat("fractalOptions.frequency", fractalOptions.frequency);
+		sh.setFloat("fractalOptions.shift", fractalOptions.shift);
 
 		if (cam.getPosition() != oldPos || oldRot != cam.getFront() || itemChanged) {
 			sh.setBool("moved", true);

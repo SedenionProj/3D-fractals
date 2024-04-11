@@ -35,25 +35,29 @@ struct Camera{
 };
 uniform Camera camera;
 
-struct RendererProprieties{
+struct RendererOptions{
     int maxIterations;
     float minDist;
     float maxDist;
 };
-uniform RendererProprieties rendererProprieties;
+uniform RendererOptions rendererOptions;
 
 
-struct FractalProperties {
+struct FractalOptions {
     int maxIterations;
-    
+
+    vec3 color;
+    float frequency;
+    float shift;
 };  
-uniform FractalProperties fractalProperties;
+uniform FractalOptions fractalOptions;
 
 struct HitRecord{
     vec3 position;
     vec3 normal;
     vec3 color;
 };
+
 
 struct Ray{
     vec3 origin;
@@ -99,13 +103,78 @@ vec3 random_in_unit_sphere(inout float seed) {
 
 
 // sdf
+const float ang = 1.;
+
+
+mat3 rotateX(float theta) {
+    float c = cos(theta);
+    float s = sin(theta);
+    return mat3(
+        vec3(1, 0, 0),
+        vec3(0, c, -s),
+        vec3(0, s, c)
+    );
+}
+
+mat3 rotateY(float theta) {
+    float c = cos(theta);
+    float s = sin(theta);
+    return mat3(
+        vec3(c, 0, s),
+        vec3(0, 1, 0),
+        vec3(-s, 0, c)
+    );
+}
+
+float fixed_radius2 = 1.0;
+float min_radius2 = 0.5;
+float folding_limit = 1.;
+float scale = 2.;
+vec4 orb = vec4(1000);
+
+void sphere_fold(inout vec3 z, inout float dz) {
+    float r2 = dot(z, z);
+    if(r2 < min_radius2) {
+        float temp = (fixed_radius2 / min_radius2);
+        z *= temp;
+        dz *= temp;
+    }else if(r2 < fixed_radius2) {
+        float temp = (fixed_radius2 / r2);
+        z *= temp;
+        dz *= temp;
+    }
+}
+
+void box_fold(inout vec3 z, inout float dz) {
+    z = clamp(z, -folding_limit, folding_limit) * 2.0 - z;
+}
+
+float sdMandelbox(vec3 z, inout float t0) {
+	//z.z = mod(z.z + 1.0, 2.0) - 1.0;
+    t0 = 1.0;
+    vec3 offset = z;
+    float dr = 1.0;
+    for(int n = 0; n < fractalOptions.maxIterations; n++) {
+		//z.xy = rot*z.xy;
+        
+        box_fold(z, dr);
+        sphere_fold(z, dr);
+
+        z = scale * z + offset;
+        dr = dr * abs(scale) + 1.;
+
+		t0 = min(t0, max(max(z.x,z.z),z.y));
+    }
+    float r = length(z);
+    return r / abs(dr);
+}
 
 float sdMandelbulb(vec3 pos, float power, inout float t0) {
 	vec3 z = pos;
 	float dr = 1.0;
 	float r = 0.0;
     t0 = 1.0;
-	for (int i = 0; i < fractalProperties.maxIterations ; i++) {
+	for (int i = 0; i < fractalOptions.maxIterations ; i++) {
 		r = length(z);
 		if(r > 1.5) break;
 		
@@ -127,6 +196,25 @@ float sdMandelbulb(vec3 pos, float power, inout float t0) {
 	return 0.5*log(r)*r/dr;
 }
 
+float sdSierpinski(vec3 z, inout float t0)
+{
+    // options
+    float Scale = 2;
+    float Offset = 1;
+    //
+
+    float r;
+    int n = 0;
+    while (n < fractalOptions.maxIterations) {
+       if(z.x+z.y<0) z.xy = -z.yx;
+       if(z.x+z.z<0) z.xz = -z.zx;
+       if(z.y+z.z<0) z.zy = -z.yz;
+       z = z*Scale - Offset*(Scale-1.0);
+       n++;
+    }
+    return (length(z) ) * pow(Scale, -float(n));
+}
+
 float sdSphere(vec3 p, float r){
     float displacement = sin(5.0 * p.x) * sin(5.0 * p.y) * sin(5.0 * p.z) * 0.00;
     return length(p) - r + displacement;
@@ -145,7 +233,10 @@ float sdScene(vec3 p, inout float t0){
         h=min(h,sdMandelbulb(p, power, t0));
         break;
     case MANDELBOX:
-        h=min(h,sdSphere(p+vec3(0,0,1), 0.5));
+        h=min(h,sdMandelbox(p, t0));
+        break;
+    case SIERPINSKI:
+        h=min(h,sdSierpinski(p, t0));
         break;
     }
     return h;
@@ -179,27 +270,25 @@ bool rayMarch(Ray ray, inout HitRecord hit){
     int i;
     vec3 p;
     float t0;
-    for(i=0; i<rendererProprieties.maxIterations; i++){
+    for(i=0; i<rendererOptions.maxIterations; i++){
         p = ray.origin + totalDistance*ray.direction;
         float currentDistance = sdScene(p, t0);
         totalDistance += currentDistance;
         
-        if(currentDistance < rendererProprieties.minDist || totalDistance > rendererProprieties.maxDist){
+        if(currentDistance < rendererOptions.minDist || totalDistance > rendererOptions.maxDist){
             break;
         }
     }
     
-    if(totalDistance>rendererProprieties.maxDist){
+    if(totalDistance>rendererOptions.maxDist){
         return false;
     }
     p = ray.origin + totalDistance*ray.direction;
     hit.position = ray.origin + 0.99*totalDistance*ray.direction;
     hit.normal = calcNormal(p);
-    hit.color =  0.5 + 0.5 * sin(5.5 + 2.6 * t0 + vec3(1., 0.0, 1.0));
+    hit.color =  0.5 + 0.5 * sin(fractalOptions.shift + fractalOptions.frequency * t0 + fractalOptions.color);
     return true;
 }
-
-
 
 vec3 pathTrace(Ray ray){
     vec3 backgroundColor = vec3(0.8,0.9,1.);
