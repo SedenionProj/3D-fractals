@@ -49,8 +49,31 @@ struct FractalOptions {
     vec3 color;
     float frequency;
     float shift;
+
+    float angleA;
+    float angleB;
 };  
 uniform FractalOptions fractalOptions;
+
+struct MandelboxOptions{
+    float fixedRadius2;
+    float minRadius2;
+    float foldingLimit;
+    float scale;
+};
+uniform MandelboxOptions mandelboxOptions;
+
+struct SierpinskiOptions{
+    float scale;
+    vec3 c;
+};
+uniform SierpinskiOptions sierpinskiOptions;
+
+struct MengerOptions{
+    float scale;
+    vec3 c;
+};
+uniform MengerOptions mengerOptions;
 
 struct HitRecord{
     vec3 position;
@@ -126,42 +149,41 @@ mat3 rotateY(float theta) {
     );
 }
 
-float fixed_radius2 = 1.0;
-float min_radius2 = 0.5;
-float folding_limit = 1.;
-float scale = 2.;
-vec4 orb = vec4(1000);
+
+
 
 void sphere_fold(inout vec3 z, inout float dz) {
     float r2 = dot(z, z);
-    if(r2 < min_radius2) {
-        float temp = (fixed_radius2 / min_radius2);
+    if(r2 < mandelboxOptions.minRadius2) {
+        float temp = (mandelboxOptions.fixedRadius2 / mandelboxOptions.minRadius2);
         z *= temp;
         dz *= temp;
-    }else if(r2 < fixed_radius2) {
-        float temp = (fixed_radius2 / r2);
+    }else if(r2 < mandelboxOptions.fixedRadius2) {
+        float temp = (mandelboxOptions.fixedRadius2 / r2);
         z *= temp;
         dz *= temp;
     }
 }
 
 void box_fold(inout vec3 z, inout float dz) {
-    z = clamp(z, -folding_limit, folding_limit) * 2.0 - z;
+    z = clamp(z, -mandelboxOptions.foldingLimit, mandelboxOptions.foldingLimit) * 2.0 - z;
 }
 
 float sdMandelbox(vec3 z, inout float t0) {
 	//z.z = mod(z.z + 1.0, 2.0) - 1.0;
-    t0 = 1.0;
     vec3 offset = z;
     float dr = 1.0;
     for(int n = 0; n < fractalOptions.maxIterations; n++) {
 		//z.xy = rot*z.xy;
+        z*=rotateY(fractalOptions.angleA);
         
         box_fold(z, dr);
         sphere_fold(z, dr);
 
-        z = scale * z + offset;
-        dr = dr * abs(scale) + 1.;
+        z = mandelboxOptions.scale * z + offset;
+        dr = dr * abs(mandelboxOptions.scale) + 1.;
+
+        z*=rotateX(fractalOptions.angleB);
 
 		t0 = min(t0, max(max(z.x,z.z),z.y));
     }
@@ -173,46 +195,82 @@ float sdMandelbulb(vec3 pos, float power, inout float t0) {
 	vec3 z = pos;
 	float dr = 1.0;
 	float r = 0.0;
-    t0 = 1.0;
 	for (int i = 0; i < fractalOptions.maxIterations ; i++) {
 		r = length(z);
 		if(r > 1.5) break;
 		
+        z*=rotateY(fractalOptions.angleA);
+
 		// convert to polar coordinates
 		float theta = acos(z.z/r);
 		float phi = atan(z.y,z.x);
 		dr =  pow( r, power-1.0)*power*dr + 1.0;
-		
+
 		// scale and rotate the point
 		float r = pow( r,power);
 		theta = theta*power;
 		phi = phi*power;
 		
+        
+
 		// convert back to cartesian coordinates
 		z = r*vec3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta))+pos;
         
+        z*=rotateX(fractalOptions.angleB);
+
         t0 = min(t0, r);
 	}
 	return 0.5*log(r)*r/dr;
 }
 
+float sdBox( vec3 p, vec3 b )
+{
+  vec3 q = abs(p) - b;
+  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
+}
+
 float sdSierpinski(vec3 z, inout float t0)
 {
-    // options
-    float Scale = 2;
-    float Offset = 1;
-    //
-
     float r;
     int n = 0;
     while (n < fractalOptions.maxIterations) {
-       if(z.x+z.y<0) z.xy = -z.yx;
-       if(z.x+z.z<0) z.xz = -z.zx;
-       if(z.y+z.z<0) z.zy = -z.yz;
-       z = z*Scale - Offset*(Scale-1.0);
-       n++;
+        z*=rotateX(fractalOptions.angleA);
+        if(z.x+z.y<0) z.xy = -z.yx;
+        if(z.x+z.z<0) z.xz = -z.zx;
+        if(z.y+z.z<0) z.zy = -z.yz;
+        z*=rotateX(fractalOptions.angleB);
+        z = z*sierpinskiOptions.scale - sierpinskiOptions.c*(sierpinskiOptions.scale-1.0);
+        n++;
     }
-    return (length(z) ) * pow(Scale, -float(n));
+    return (length(z) ) * pow(sierpinskiOptions.scale, -float(n));
+}
+
+float sdMenger(vec3 z, inout float t0){
+
+    int n = 0;
+   
+
+    for (n = 0; n < fractalOptions.maxIterations; n++) {
+      z = z*rotateY(fractalOptions.angleA);
+      z = z*rotateX(fractalOptions.angleB);
+      //folding
+      z = abs(z);
+      if(z.x<z.y) z.xy = z.yx;
+      if(z.x<z.z) z.xz = z.zx;
+      if(z.y<z.z) z.zy = z.yz;
+   
+    
+      z.x=mengerOptions.scale*z.x-mengerOptions.c.x*(mengerOptions.scale-1);
+      z.y=mengerOptions.scale*z.y-mengerOptions.c.y*(mengerOptions.scale-1);
+      z.z=mengerOptions.scale*z.z;
+   
+      if(z.z>0.5*mengerOptions.c.z*(mengerOptions.scale-1)) z.z-=mengerOptions.c.z*(mengerOptions.scale-1);
+   
+      t0 = min(t0, length(z));
+   }
+
+   return sdBox(z, mengerOptions.c)  * pow(mengerOptions.scale, -float(n));
+
 }
 
 float sdSphere(vec3 p, float r){
@@ -237,6 +295,9 @@ float sdScene(vec3 p, inout float t0){
         break;
     case SIERPINSKI:
         h=min(h,sdSierpinski(p, t0));
+        break;
+    case MENGER:
+        h=min(h,sdMenger(p, t0));
         break;
     }
     return h;
@@ -269,13 +330,14 @@ bool rayMarch(Ray ray, inout HitRecord hit){
     float totalDistance = 0.;
     int i;
     vec3 p;
-    float t0;
+    float t0 = MAX_FLOAT;
     for(i=0; i<rendererOptions.maxIterations; i++){
         p = ray.origin + totalDistance*ray.direction;
         float currentDistance = sdScene(p, t0);
         totalDistance += currentDistance;
         
         if(currentDistance < rendererOptions.minDist || totalDistance > rendererOptions.maxDist){
+            totalDistance-=rendererOptions.minDist;
             break;
         }
     }
