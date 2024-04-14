@@ -1,5 +1,4 @@
 #version 460
-
 layout(std430, binding = 0) buffer _colBuff
 {
    vec4 colBuff[]; 
@@ -7,15 +6,15 @@ layout(std430, binding = 0) buffer _colBuff
 
 out vec4 FragCol;
 
-#define MAX_BOUNCE 5
-
 #define MAX_FLOAT 9999999.
 
 uniform int select_fractal;
 uniform int select_renderer;
+uniform int select_material;
 
 uniform bool moved;
 uniform int frame;
+uniform vec2 resolution;
 
 const uint MANDELBULB = 0;
 const uint MANDELBOX = 1;
@@ -26,57 +25,15 @@ const uint PATH_TRACING = 0;
 const uint BLINN_PHONG = 1;
 const uint PREVIEW = 2;
 
-struct Camera{
-    vec3 origin;
-    vec3 direction;
-    float vfov;
-    float defocusAngle;
-    float focusDistance;
-};
-uniform Camera camera;
+const uint LAMBERTIAN = 0;
+const uint METAL = 1;
+const uint DIELECTRIC = 2;
 
-struct RendererOptions{
-    int maxIterations;
-    float minDist;
-    float maxDist;
-};
-uniform RendererOptions rendererOptions;
-
-
-struct FractalOptions {
-    int maxIterations;
-
-    vec3 color;
-    float frequency;
-    float shift;
-
-    float angleA;
-    float angleB;
-};  
-uniform FractalOptions fractalOptions;
-
-struct MandelboxOptions{
-    float fixedRadius2;
-    float minRadius2;
-    float foldingLimit;
-    float scale;
-};
-uniform MandelboxOptions mandelboxOptions;
-
-struct SierpinskiOptions{
-    float scale;
-    vec3 c;
-};
-uniform SierpinskiOptions sierpinskiOptions;
-
-struct MengerOptions{
-    float scale;
-    vec3 c;
-};
-uniform MengerOptions mengerOptions;
+// (options)
 
 struct HitRecord{
     vec3 position;
+    float dist;
     vec3 normal;
     vec3 color;
 };
@@ -87,7 +44,7 @@ struct Ray{
     vec3 direction;
 };
 
-// hash
+// ----- Hash -----
 
 float g_seed = 0.;
 
@@ -95,6 +52,11 @@ uint base_hash(uvec2 p) {
     p = 1103515245U*((p >> 1U)^(p.yx));
     uint h32 = 1103515245U*((p.x)^(p.y>>3U));
     return h32^(h32 >> 16);
+}
+
+float hash1(inout float seed) {
+    uint n = base_hash(floatBitsToUint(vec2(seed+=.1,seed+=.1)));
+    return float(n)/float(0xffffffffU);
 }
 
 vec2 hash2(inout float seed) {
@@ -123,11 +85,9 @@ vec3 random_in_unit_sphere(inout float seed) {
 	return r * vec3(sqrt(1.-h.x*h.x)*vec2(sin(phi),cos(phi)),h.x);
 }
 
-
-
-// sdf
 const float ang = 1.;
 
+// ----- Math -----
 
 mat3 rotateX(float theta) {
     float c = cos(theta);
@@ -149,8 +109,13 @@ mat3 rotateY(float theta) {
     );
 }
 
+float schlick(float cosine, float ref_idx){
+    float r0 = (1.-ref_idx)/(1.+ref_idx);
+    r0 = r0*r0;
+    return r0 +(1.-r0)*pow((1.-cosine),5.);
+}
 
-
+// ----- Signed distance functions -----
 
 void sphere_fold(inout vec3 z, inout float dz) {
     float r2 = dot(z, z);
@@ -171,6 +136,7 @@ void box_fold(inout vec3 z, inout float dz) {
 
 float sdMandelbox(vec3 z, inout float t0) {
 	//z.z = mod(z.z + 1.0, 2.0) - 1.0;
+    t0 = MAX_FLOAT;
     vec3 offset = z;
     float dr = 1.0;
     for(int n = 0; n < fractalOptions.maxIterations; n++) {
@@ -185,10 +151,9 @@ float sdMandelbox(vec3 z, inout float t0) {
 
         z*=rotateX(fractalOptions.angleB);
 
-		t0 = min(t0, max(max(z.x,z.z),z.y));
+		t0 = min(t0, length(z));
     }
-    float r = length(z);
-    return r / abs(dr);
+    return length(z) / abs(dr);
 }
 
 float sdMandelbulb(vec3 pos, float power, inout float t0) {
@@ -211,8 +176,6 @@ float sdMandelbulb(vec3 pos, float power, inout float t0) {
 		theta = theta*power;
 		phi = phi*power;
 		
-        
-
 		// convert back to cartesian coordinates
 		z = r*vec3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta))+pos;
         
@@ -233,14 +196,14 @@ float sdSierpinski(vec3 z, inout float t0)
 {
     float r;
     int n = 0;
-    while (n < fractalOptions.maxIterations) {
+    for (n = 0; n < fractalOptions.maxIterations; n++) {
         z*=rotateX(fractalOptions.angleA);
         if(z.x+z.y<0) z.xy = -z.yx;
         if(z.x+z.z<0) z.xz = -z.zx;
         if(z.y+z.z<0) z.zy = -z.yz;
         z*=rotateX(fractalOptions.angleB);
         z = z*sierpinskiOptions.scale - sierpinskiOptions.c*(sierpinskiOptions.scale-1.0);
-        n++;
+        t0 = min(t0, length(z));
     }
     return (length(z) ) * pow(sierpinskiOptions.scale, -float(n));
 }
@@ -248,7 +211,7 @@ float sdSierpinski(vec3 z, inout float t0)
 float sdMenger(vec3 z, inout float t0){
 
     int n = 0;
-   
+    t0 = MAX_FLOAT;
 
     for (n = 0; n < fractalOptions.maxIterations; n++) {
       z = z*rotateY(fractalOptions.angleA);
@@ -300,7 +263,40 @@ float sdScene(vec3 p, inout float t0){
         h=min(h,sdMenger(p, t0));
         break;
     }
+    h=min(h,sdPlane(p, -1.));
     return h;
+}
+
+// ----- Ray Marching -----
+
+float AmbientOcclusion(vec3 p, vec3 normal, float step_dist, float step_nbr)
+{
+    float occlusion = 1.f;
+    float tmp;
+    while(step_nbr > 0.0)
+    {
+	occlusion -= pow(step_nbr * step_dist - (sdScene( p + normal * step_nbr * step_dist,tmp)),2.) / step_nbr;
+	step_nbr--;
+    }
+
+    return occlusion;
+}
+
+float softShadow(vec3 ro,vec3 rd, float mint, float maxt, float w )
+{
+    float res = 1.0;
+    float t = mint;
+    float tmp;
+    for( int i=0; i<256 && t<maxt; i++ )
+    {
+        float h = sdScene(ro + t*rd,tmp);
+        res = min( res, h/(w*t) );
+        t += clamp(h, 0.005, 0.50);
+        if( res<-1.0 || t>maxt ) break;
+    }
+    res = max(res,-1.0);
+    return 0.25*(1.0+res)*(1.0+res)*(2.0-res);
+    // https://iquilezles.org/articles/rmshadows/
 }
 
 vec3 calcNormal(in vec3 p) {
@@ -326,11 +322,15 @@ vec3 getSkyColor(vec3 direction){
     return color;
 }
 
+vec3 setFrontNormal(vec3 n, vec3 dir){
+    return dot(n,dir)<0 ? n : -n;
+}
+
 bool rayMarch(Ray ray, inout HitRecord hit){
     float totalDistance = 0.;
     int i;
     vec3 p;
-    float t0 = MAX_FLOAT;
+    float t0 = 0.;
     for(i=0; i<rendererOptions.maxIterations; i++){
         p = ray.origin + totalDistance*ray.direction;
         float currentDistance = sdScene(p, t0);
@@ -347,10 +347,44 @@ bool rayMarch(Ray ray, inout HitRecord hit){
     }
     p = ray.origin + totalDistance*ray.direction;
     hit.position = ray.origin + 0.99*totalDistance*ray.direction;
-    hit.normal = calcNormal(p);
+    hit.normal = setFrontNormal(calcNormal(p),ray.direction);
     hit.color =  0.5 + 0.5 * sin(fractalOptions.shift + fractalOptions.frequency * t0 + fractalOptions.color);
+    hit.dist = totalDistance;
     return true;
 }
+
+
+
+void scatter(inout Ray ray, HitRecord hit){
+    ray.origin = hit.position;
+    switch (select_material){
+    case LAMBERTIAN:
+        ray.direction = hit.normal+random_in_unit_sphere(g_seed);
+        break;
+    case METAL:
+        vec3 reflected = reflect(normalize(ray.direction),hit.normal);
+        ray.direction = reflected + materialOptions.roughness*random_in_unit_sphere(g_seed);
+        break;
+    case DIELECTRIC:
+        float refraction_ratio = materialOptions.refractionRatio;
+        
+        vec3 unit_dir = normalize(ray.direction); 
+        float cos_theta = min(dot(-unit_dir, hit.normal),1.0);
+        float sin_theta = sqrt(1.0 - cos_theta*cos_theta);
+                
+        bool cannot_refract = refraction_ratio * sin_theta > 1.0;
+        if(cannot_refract || schlick(cos_theta,refraction_ratio)>hash1(g_seed)){
+            ray.direction =  reflect(unit_dir,hit.normal);
+
+        }else{
+            ray.direction =  refract(unit_dir,hit.normal,refraction_ratio);
+        }
+        break;
+    }
+    
+}
+
+// ----- Renderers -----
 
 vec3 pathTrace(Ray ray){
     vec3 backgroundColor = vec3(0.8,0.9,1.);
@@ -358,29 +392,41 @@ vec3 pathTrace(Ray ray){
     HitRecord hit;
     vec3 attenuation  = vec3(1);
     
-    for(int i = 0; i<MAX_BOUNCE; i++){
+    for(int i = 0; i<rendererOptions.maxBounce; i++){
         if(!rayMarch(currentRay, hit)){
-            return attenuation*getSkyColor(currentRay.direction); //texture(iChannel0, -currentRay.direction).rgb;
+            vec3 col = attenuation*getSkyColor(currentRay.direction);
+            return mix(col, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
         }
-        currentRay.origin = hit.position;
-        currentRay.direction = hit.normal+random_in_unit_sphere(g_seed);
-        //attenuation *= vec3(1.+hit.normal)*0.5;
+        scatter(currentRay, hit);
         attenuation *= hit.color;
     }
-    return vec3(0);
+    if (rendererOptions.bounceBlack)
+        return vec3(0);
+    else
+        return attenuation*getSkyColor(currentRay.direction);
 }
 
 vec3 blinnPhong(Ray ray){
     HitRecord hit;
-    vec3 color = vec3(0);
-    vec3 lightDirection = normalize(vec3(1,1,1));
+    vec3 color = getSkyColor(ray.direction);
+    vec3 lightPosition = vec3(1,1,1)*1000.;
     if(rayMarch(ray, hit)){
+        vec3 lightDirection = normalize(lightPosition - hit.position);
+        
         float ambient = 0.01;
         float diffuse = max(dot(hit.normal, lightDirection),0.)*0.5;
         vec3 halfwayDir = normalize(lightDirection + (ray.origin - hit.position));  
         float spec = pow(max(dot(hit.normal, halfwayDir), 0.0), 32.0);
         color = (ambient+diffuse)*hit.color + spec;
+
+        float ambOccl = clamp(pow(AmbientOcclusion(hit.position,hit.normal,0.5,20.),64.),0.1,1.);
+        float sh = clamp(softShadow(hit.position, lightDirection, 0.02, 20.5, 0.5), 0.1, 1.);
+        
+        color = color * sh;
+
+        color = mix(color, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
     }
+    
     return color;
 }
 
@@ -416,10 +462,16 @@ Ray getRay(vec2 uv, vec3 origin, vec3 direction){
 
 }
 
-
+float vignette(vec2 uv){
+    // from https://www.shadertoy.com/view/lsKSWR
+    uv *=  1.0 - uv.yx;
+    return pow(uv.x*uv.y *30.0, 0.07);
+}
 
 void main(){
-	vec2 uv = 2.*gl_FragCoord.xy/1280.-1.;
+	vec2 uv = 2.*gl_FragCoord.xy/resolution-1.;
+    uv.x*=resolution.x/resolution.y;
+
     g_seed = float(base_hash(floatBitsToUint(gl_FragCoord.xy)))/float(0xffffffffU) + frame;
     int pixelIndex = int(gl_FragCoord.x+1280.*gl_FragCoord.y);
 
@@ -439,12 +491,14 @@ void main(){
         break;
     }
     
-
-    //color = pow(color, vec3(1.0/2.2)); // Gamma correction
     if(moved)
         colBuff[pixelIndex] =  vec4(color, 1);
     else
         colBuff[pixelIndex] += vec4(color, 1);
     
-    FragCol = vec4(pow(colBuff[pixelIndex].xyz/colBuff[pixelIndex].w, vec3(1.0/2.2)),1.0); // couleur finale	
+    color = colBuff[pixelIndex].xyz/colBuff[pixelIndex].w;
+    color = pow(color, vec3(1.0/2.2)); // Gamma correction
+    color *= vignette(gl_FragCoord.xy/resolution);
+
+    FragCol = vec4(color,1.0); // couleur finale	
 }

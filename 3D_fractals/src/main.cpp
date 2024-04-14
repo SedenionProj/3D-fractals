@@ -1,5 +1,7 @@
 #include <seden.h>
 #include <vector>
+#include "../assets/options.h"
+#include "shaders.h"
 
 const float PI = 3.141592;
 
@@ -17,58 +19,51 @@ GLuint createSSBO(const std::vector<glm::vec4>& varray)
 const int width = 1280;
 const int height = 720;
 
-struct Camera {
-	//glm::vec3 origin;
-	//glm::vec3 direction;
-	float vfov = 90.f;
-	float defocusAngle = 0.f;
-	float focusDistance = 1.f;
-};
-Camera camera;
+void defaultPresset() {
+	// presets are hard coded for now
+	camera.origin;
+	camera.direction;
+	camera.vfov = 90.f;
+	camera.defocusAngle = 0.f;
+	camera.focusDistance = 1.f;
 
-struct RendererOptions {
-	int maxIterations = 255;
-	float minDist = 0.001f;
-	float maxDist = 100.f;
-};
-RendererOptions rendererOptions;
+	rendererOptions.maxIterations = 255;
+	rendererOptions.maxBounce = 3;
+	rendererOptions.minDist = 0.001f;
+	rendererOptions.maxDist = 100.f;
+	rendererOptions.fogDist = 0.01f;
+	rendererOptions.bounceBlack = true;
 
-struct FractalOptions {
-	int maxIterations = 12;
+	fractalOptions.maxIterations = 12;
+	fractalOptions.color = vec3(1);
+	fractalOptions.frequency = 0.;
+	fractalOptions.shift = 0.;
+	fractalOptions.angleA = 0;
+	fractalOptions.angleB = 0;
 
-	glm::vec3 color = glm::vec3(1);
-	float frequency = 0.;
-	float shift = 0.;
-	float angleA = 0;
-	float angleB = 0;
-};
-FractalOptions fractalOptions;
+	mandelboxOptions.fixedRadius2 = 1.0;
+	mandelboxOptions.minRadius2 = 0.5;
+	mandelboxOptions.foldingLimit = 1.;
+	mandelboxOptions.scale = 2.;
 
-struct MandelboxOptions {
-	float fixedRadius2 = 1.0;
-	float minRadius2 = 0.5;
-	float foldingLimit = 1.;
-	float scale = 2.;
-};
-MandelboxOptions mandelboxOptions;
+	sierpinskiOptions.scale = 2.f;
+	sierpinskiOptions.c = vec3(1);
 
-struct SierpinskiOptions {
-	float scale = 2.f;
-	glm::vec3 c = glm::vec3(1);
-};
-SierpinskiOptions sierpinskiOptions;
+	mengerOptions.scale = 3.f;
+	mengerOptions.c = vec3(1);
 
-struct MengerOptions {
-	float scale = 3.f;
-	glm::vec3 c = glm::vec3(1);
-};
-MengerOptions mengerOptions;
+	materialOptions.roughness = 0.5;
+	materialOptions.refractionRatio = 0.5;
+}
 
 int main() {
 	Seden::win::init(1280, 720, "3D fractals");
 	Seden::win::initGui();
 
-	Shader sh = Shader("assets/fractalVert.glsl", "assets/fractalFrag.glsl");
+	defaultPresset();
+
+	Shader sh;
+	createShader(sh);
 
 	std::vector<glm::vec4> colBuf(width * height, glm::vec4(0));
 	GLuint ssbo = createSSBO(colBuf);
@@ -81,32 +76,13 @@ int main() {
 	glGenVertexArrays(1, &triangleVAO);
 	glBindVertexArray(triangleVAO);
 
-	float var1 = 1;
-	bool tt = 1;
-
 	int frame = 0;
-	bool my_tool_active;
 
-	enum RENDERER
-	{
-		PATH_TRACING = 0,
-		BLINN_PHONG,
-		PREVIEW,
-	};
-
-	enum FRACTAL
-	{
-		MANDELBULB = 0,
-		MANDELBOX,
-		SIERPINSKI,
-		MENGER,
-	};
-
-	int select_renderer = BLINN_PHONG;
-	int select_fractal = MANDELBULB;
-	bool itemChanged = false;
+	bool optionsWindow;
+	bool timeLine;
 
 	float speed = 1;
+	
 
 	while (Seden::win::isRunning()) {
 		frame++;
@@ -117,7 +93,8 @@ int main() {
 		Seden::win::clearGui();
 
 		// GUI
-		ImGui::Begin("Options", &my_tool_active, ImGuiWindowFlags_MenuBar);
+		ImGui::DockSpaceOverViewport(nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+		ImGui::Begin("Options", &optionsWindow, ImGuiWindowFlags_MenuBar);
 		if (glfwGetMouseButton(Seden::win::getWindowRef(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && ImGui::IsAnyItemHovered()) {
 			itemChanged = true;
 		}
@@ -136,6 +113,12 @@ int main() {
 				if (ImGui::MenuItem("Mandelbox")) { select_fractal = MANDELBOX; }
 				if (ImGui::MenuItem("Sierpinski")) { select_fractal = SIERPINSKI ; }
 				if (ImGui::MenuItem("Menger")) { select_fractal = MENGER; }
+				ImGui::EndMenu();
+			}
+			if (ImGui::BeginMenu("material")) {
+				if (ImGui::MenuItem("Lambertian")) { select_material = LAMBERTIAN; }
+				if (ImGui::MenuItem("Metal")) { select_material = METAL; }
+				if (ImGui::MenuItem("Dielectric")) { select_material = DIELECTRIC; }
 				ImGui::EndMenu();
 			}
 			ImGui::EndMenuBar();
@@ -158,10 +141,13 @@ int main() {
 			ImGui::SliderInt("maximum iterations", &rendererOptions.maxIterations, 0, 255);
 			ImGui::SliderFloat("minimum distance", &rendererOptions.minDist, .0f, .001f,"%.10f");
 			ImGui::SliderFloat("maximum distance", &rendererOptions.maxDist, 10, 1000);
+			ImGui::SliderFloat("fog distance", &rendererOptions.fogDist, 0, 1., "%.5f");
 			switch (select_renderer)
 			{
 			case PATH_TRACING:
 				ImGui::SeparatorText("path tracing");
+				ImGui::SliderInt("maximum bounces", &rendererOptions.maxBounce, 1, 25);
+				ImGui::Checkbox("bounce black", &rendererOptions.bounceBlack);
 				break;
 			case BLINN_PHONG:
 				ImGui::SeparatorText("blinn phong");
@@ -209,13 +195,36 @@ int main() {
 			}
 			
 		}
+
+		if (ImGui::CollapsingHeader("Material options")) {
+			switch (select_material)
+			{
+			case LAMBERTIAN:
+				ImGui::Text("no options available");
+				break;
+			case METAL:
+				ImGui::SliderFloat("roughness", &materialOptions.roughness, 0, 1, "%.5f");
+				break;
+			default:
+				ImGui::SliderFloat("refraction ratio", &materialOptions.refractionRatio, 0, 1, "%.5f");
+				break;
+			}
+		}
 		ImGui::End();
+
+
+		ImGui::Begin("timeLine", &timeLine, ImGuiWindowFlags_MenuBar);
+
+		ImGui::End();
+
 		// render
 		sh.Bind();
 		
 		sh.setInt("frame", frame);
 		sh.setInt("select_fractal", select_fractal);
 		sh.setInt("select_renderer", select_renderer);
+		sh.setInt("select_material", select_material);
+		sh.setVec2("resolution", glm::vec2(width, height));
 
 		sh.setVec3("camera.origin", cam.getPosition());
 		sh.setVec3("camera.direction", cam.getFront());
@@ -226,6 +235,9 @@ int main() {
 		sh.setInt("rendererOptions.maxIterations",rendererOptions.maxIterations);
 		sh.setFloat("rendererOptions.minDist", rendererOptions.minDist);
 		sh.setFloat("rendererOptions.maxDist", rendererOptions.maxDist);
+		sh.setFloat("rendererOptions.fogDist", rendererOptions.fogDist);
+		sh.setInt("rendererOptions.maxBounce", rendererOptions.maxBounce);
+		sh.setBool("rendererOptions.bounceBlack", rendererOptions.bounceBlack);
 
 		sh.setInt("fractalOptions.maxIterations", fractalOptions.maxIterations);
 		sh.setVec3("fractalOptions.color", fractalOptions.color);
@@ -245,6 +257,8 @@ int main() {
 		sh.setFloat("mengerOptions.scale", mengerOptions.scale);
 		sh.setVec3("mengerOptions.c", mengerOptions.c);
 		
+		sh.setFloat("materialOptions.roughness", materialOptions.roughness);
+		sh.setFloat("materialOptions.refractionRatio", materialOptions.refractionRatio);
 
 		if (cam.getPosition() != oldPos || oldRot != cam.getFront() || itemChanged) {
 			sh.setBool("moved", true);
@@ -259,12 +273,11 @@ int main() {
 		Seden::win::drawGui();
 		Seden::win::display();
 	}
-
-
+	
 	Seden::win::terminate();
 	Seden::win::terminateGui();
 }
-// todo : vignette , bloom lod , tonemaping
+// todo : bloom lod , tonemaping
 
 void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window, float speed)
 {
