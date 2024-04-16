@@ -23,6 +23,7 @@ struct RendererOptions {
 
 struct FractalOptions {
 	int maxIterations;
+	bool enableGound;
 
 	vec3 color;
 	float frequency;
@@ -64,6 +65,19 @@ RendererOptions rendererOptions;
 Camera camera;
 
 // end options
+
+struct Render {
+	vec3 from;
+	vec3 direction;
+	int frame;
+	int maxFrame;
+	int maxSample;
+	int Sample;
+	bool rendering;
+	bool preview;
+	char filePath[30];
+};
+Render render;
 
 enum RENDERER
 {

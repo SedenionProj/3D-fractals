@@ -4,6 +4,11 @@ layout(std430, binding = 0) buffer _colBuff
    vec4 colBuff[]; 
 };
 
+layout(std430, binding = 1) buffer varSsbo
+{
+    float totalDistCPU; 
+};
+
 out vec4 FragCol;
 
 #define MAX_FLOAT 9999999.
@@ -160,6 +165,7 @@ float sdMandelbulb(vec3 pos, float power, inout float t0) {
 	vec3 z = pos;
 	float dr = 1.0;
 	float r = 0.0;
+    t0 = MAX_FLOAT;
 	for (int i = 0; i < fractalOptions.maxIterations ; i++) {
 		r = length(z);
 		if(r > 1.5) break;
@@ -196,6 +202,7 @@ float sdSierpinski(vec3 z, inout float t0)
 {
     float r;
     int n = 0;
+    t0 = MAX_FLOAT;
     for (n = 0; n < fractalOptions.maxIterations; n++) {
         z*=rotateX(fractalOptions.angleA);
         if(z.x+z.y<0) z.xy = -z.yx;
@@ -263,24 +270,26 @@ float sdScene(vec3 p, inout float t0){
         h=min(h,sdMenger(p, t0));
         break;
     }
-    h=min(h,sdPlane(p, -1.));
+    if(fractalOptions.enableGound)
+        h=min(h,sdPlane(p, -1.));
     return h;
 }
 
 // ----- Ray Marching -----
 
-float AmbientOcclusion(vec3 p, vec3 normal, float step_dist, float step_nbr)
+float ambientOcclusion(vec3 point, vec3 normal, float step_dist, float step_nbr)
 {
     float occlusion = 1.f;
     float tmp;
     while(step_nbr > 0.0)
     {
-	occlusion -= pow(step_nbr * step_dist - (sdScene( p + normal * step_nbr * step_dist,tmp)),2.) / step_nbr;
+	occlusion -= pow(step_nbr * step_dist - (sdScene( point + normal * step_nbr * step_dist,tmp)),2.) / step_nbr;
 	step_nbr--;
     }
 
     return occlusion;
 }
+
 
 float softShadow(vec3 ro,vec3 rd, float mint, float maxt, float w )
 {
@@ -342,14 +351,16 @@ bool rayMarch(Ray ray, inout HitRecord hit){
         }
     }
     
+   
     if(totalDistance>rendererOptions.maxDist){
         return false;
     }
+    hit.dist = totalDistance;
     p = ray.origin + totalDistance*ray.direction;
     hit.position = ray.origin + 0.99*totalDistance*ray.direction;
     hit.normal = setFrontNormal(calcNormal(p),ray.direction);
+
     hit.color =  0.5 + 0.5 * sin(fractalOptions.shift + fractalOptions.frequency * t0 + fractalOptions.color);
-    hit.dist = totalDistance;
     return true;
 }
 
@@ -395,6 +406,7 @@ vec3 pathTrace(Ray ray){
     for(int i = 0; i<rendererOptions.maxBounce; i++){
         if(!rayMarch(currentRay, hit)){
             vec3 col = attenuation*getSkyColor(currentRay.direction);
+            // fog is broken on path tracing
             return mix(col, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
         }
         scatter(currentRay, hit);
@@ -417,12 +429,14 @@ vec3 blinnPhong(Ray ray){
         float diffuse = max(dot(hit.normal, lightDirection),0.)*0.5;
         vec3 halfwayDir = normalize(lightDirection + (ray.origin - hit.position));  
         float spec = pow(max(dot(hit.normal, halfwayDir), 0.0), 32.0);
-        color = (ambient+diffuse)*hit.color + spec;
 
-        float ambOccl = clamp(pow(AmbientOcclusion(hit.position,hit.normal,0.5,20.),64.),0.1,1.);
-        float sh = clamp(softShadow(hit.position, lightDirection, 0.02, 20.5, 0.5), 0.1, 1.);
-        
-        color = color * sh;
+        float sh = softShadow(hit.position, lightDirection, 0.01, 3.0, 0.1);
+
+        color = (ambient+diffuse*sh)*hit.color + spec;
+
+        float ambOccl = clamp(pow(ambientOcclusion(hit.position,hit.normal,0.015,20.),32.),0.1,1.);
+
+        color = color*ambOccl;
 
         color = mix(color, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
     }
@@ -456,8 +470,10 @@ Ray getRay(vec2 uv, vec3 origin, vec3 direction){
     
     vec2 rd = random_in_unit_disk(g_seed)*defocusRadius;
     vec3 offset = rd.x * right + rd.y * up;
-         
-    vec3 dir = normalize(h*uv.x*right + h*uv.y*up + front*focusDistance - offset);
+        
+    vec2 aa = hash2(g_seed)*0.001; // antialiasing
+
+    vec3 dir = normalize(h*(uv.x+aa.x)*right + h*(uv.y+aa.y)*up + front*focusDistance - offset);
     return Ray(origin+offset, dir);
 
 }
@@ -473,12 +489,12 @@ void main(){
     uv.x*=resolution.x/resolution.y;
 
     g_seed = float(base_hash(floatBitsToUint(gl_FragCoord.xy)))/float(0xffffffffU) + frame;
-    int pixelIndex = int(gl_FragCoord.x+1280.*gl_FragCoord.y);
+    int pixelIndex = int(gl_FragCoord.x+resolution.x*gl_FragCoord.y);
 
     vec3 color = vec3(0,0,0);
     
     Ray ray = getRay(uv, camera.origin, camera.direction);
-    
+
     switch (select_renderer){
     case PATH_TRACING:
         color += pathTrace(ray);
@@ -491,6 +507,12 @@ void main(){
         break;
     }
     
+    float tmp;
+    if(pixelIndex == resolution.y*resolution.x/2)
+        totalDistCPU = sdScene(ray.origin,tmp);
+
+    
+
     if(moved)
         colBuff[pixelIndex] =  vec4(color, 1);
     else

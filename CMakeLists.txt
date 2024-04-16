@@ -12,7 +12,7 @@ file(GLOB_RECURSE SOURCES
 
 # Add executable
 add_executable(${EXE_NAME} ${SOURCES})
-
+target_compile_features(${EXE_NAME} PUBLIC cxx_std_20)
 # -- libs --
 
 # Opengl_startup_project
