@@ -30,8 +30,8 @@ GLuint createSSBO(const void* data, int size)
 	return ssbo;
 }
 
-const int width = 1280;
-const int height = 720;
+const int width = 1920;
+const int height = 1080;
 
 float aspect = (float)width/height;
 
@@ -70,6 +70,8 @@ void defaultPresset() {
 	fractalOptions.angleB = 0;
 	fractalOptions.enableGound = true;
 
+	mandelbulbOptions.power = 8;
+
 	mandelboxOptions.fixedRadius2 = 1.0;
 	mandelboxOptions.minRadius2 = 0.5;
 	mandelboxOptions.foldingLimit = 1.;
@@ -91,6 +93,7 @@ void defaultPresset() {
 	render.maxSample = 10;
 	render.rendering = false;
 	render.preview = false;
+	render.speed = 1.f;
 }
 
 void sendGPU(Shader& sh) {
@@ -122,6 +125,8 @@ void sendGPU(Shader& sh) {
 	sh.setFloat("fractalOptions.angleA", fractalOptions.angleA);
 	sh.setFloat("fractalOptions.angleB", fractalOptions.angleB);
 	sh.setBool("fractalOptions.enableGound", fractalOptions.enableGound);
+
+	sh.setFloat("mandelbulbOptions.power", mandelbulbOptions.power);
 
 	sh.setFloat("mandelboxOptions.fixedRadius2", mandelboxOptions.fixedRadius2);
 	sh.setFloat("mandelboxOptions.minRadius2", mandelboxOptions.minRadius2);
@@ -190,7 +195,7 @@ void drawOptionWindow() {
 		ImGui::SliderInt("maximum iterations", &rendererOptions.maxIterations, 0, 255);
 		ImGui::SliderFloat("minimum distance", &rendererOptions.minDist, .0f, .001f, "%.10f");
 		ImGui::SliderFloat("maximum distance", &rendererOptions.maxDist, 10, 1000);
-		ImGui::SliderFloat("fog distance", &rendererOptions.fogDist, 0, 0.1, "%.5f");
+		ImGui::SliderFloat("fog distance", &rendererOptions.fogDist, 0, 0.2, "%.5f");
 		switch (select_renderer)
 		{
 		case PATH_TRACING:
@@ -222,6 +227,7 @@ void drawOptionWindow() {
 		{
 		case MANDELBULB:
 			ImGui::SeparatorText("mandelbulb");
+			ImGui::SliderFloat("power", &mandelbulbOptions.power, .0f, 20.f, "%.5f");
 			break;
 		case MANDELBOX:
 			ImGui::SeparatorText("mandelbox");
@@ -256,7 +262,7 @@ void drawOptionWindow() {
 			ImGui::SliderFloat("roughness", &materialOptions.roughness, 0, 1, "%.5f");
 			break;
 		default:
-			ImGui::SliderFloat("refraction ratio", &materialOptions.refractionRatio, 0, 1, "%.5f");
+			ImGui::SliderFloat("refraction ratio", &materialOptions.refractionRatio, 0, 2, "%.5f");
 			break;
 		}
 	}
@@ -270,7 +276,8 @@ void drawRenderWindow() {
 		itemChanged = false;
 		Seden::win::saveFrame("output");
 	}
-	if (ImGui::Button("direction")) {
+	ImGui::InputFloat("speed", &render.speed);
+	if (ImGui::Button("set direction")) {
 		render.direction = cam.getFront();
 	}
 	ImGui::InputFloat3("direction", value_ptr(render.direction));
@@ -285,6 +292,9 @@ void drawRenderWindow() {
 		render.preview = true;
 		render.rendering = true;
 	}
+	if (ImGui::Button("stop")) {
+		render.frame = render.maxFrame;
+	}
 	ImGui::InputText("file path", render.filePath, 30);
 	if (ImGui::IsItemActive()) { lockCamera = true; }
 	else lockCamera = false;
@@ -296,18 +306,26 @@ void drawRenderWindow() {
 		if (std::filesystem::exists(path)) {
 			render.from = cam.getPosition();
 			render.rendering = true;
+			Seden::win::startRecording(render.filePath);
 		}
 		
 	}
+	ImGui::SeparatorText("screen recorder");
+	if (ImGui::Button("start recording")) {
+		Seden::win::startRecording(render.filePath);
+	}
+	if (ImGui::Button("stop recording")) {
+		Seden::win::stopRecording();
+	}
+
 	if (render.rendering) {
 		ImGui::Text(std::string("frame: " + std::to_string(render.frame + 1)).c_str());
-
 	}
 	ImGui::End();
 }
 
 int main() {
-	Seden::win::init(1280, 720, "3D fractals");
+	Seden::win::init(width, height, "3D fractals");
 	Seden::win::initGui();
 
 	defaultPresset();
@@ -343,8 +361,6 @@ int main() {
 
 		sendGPU(sh);
 
-		
-
 		if (cam.getPosition() != oldPos || oldRot != cam.getFront() || itemChanged) {
 			sh.setBool("moved", true);
 		}
@@ -361,6 +377,9 @@ int main() {
 		{
 			totalDistance = 1;
 		}
+
+		//sierpinskiOptions.c = glm::vec3(cos(frame / 25.)/5.+0.5, cos(frame / 25. + 0.78) / 5. + 0.5, cos(frame / 25. +0.51) / 5. + 0.5);
+		//fractalOptions.angleB += 0.01;
 
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
 		glBindVertexArray(triangleVAO);
@@ -379,21 +398,28 @@ int main() {
 		if (render.rendering) {
 			render.Sample++;
 			
-			if (render.Sample == render.maxSample) {
+			if (render.Sample >= render.maxSample) {
 				render.Sample = 0;
 				render.frame++;
 				glm::vec3 pos = cam.getPosition();
-				cam.setPosition(pos + render.direction * totalDistance*0.1f);
+				cam.setPosition(pos + render.direction * totalDistance * 0.05f * render.speed);
 				itemChanged = true;
 				if(!render.preview)
-					Seden::win::saveFrame(render.filePath+std::to_string(render.frame));
+					Seden::win::saveRecordingFrame();
+					//Seden::win::saveFrame(render.filePath+std::to_string(render.frame));
 			}
-			if (render.frame == render.maxFrame) {
+			if (render.frame >= render.maxFrame) {
 				cam.setPosition(render.from);
+				Seden::win::stopRecording();
 				render.frame = 0;
+				render.Sample = 0;
 				render.rendering = false;
 				render.preview = false;
 			}
+		}
+
+		if (Seden::win::isRecording() && !render.rendering) {
+			Seden::win::saveRecordingFrame();
 		}
 
 		// display
@@ -404,11 +430,12 @@ int main() {
 	Seden::win::terminate();
 	Seden::win::terminateGui();
 }
-
+float lu = 0;
+float lr = 0;
 void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window, float speed)
 {
 	const float cameraSpeed = speed * Seden::win::getDeltaTime();
-	const float sensitivity = 1.5f * Seden::win::getDeltaTime();
+	const float sensitivity = 1.f * Seden::win::getDeltaTime();
 
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
 		camera.moveFront(cameraSpeed);
@@ -431,4 +458,35 @@ void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window, float sp
 		camera.rotate(sensitivity, 0.0);
 	if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
 		camera.rotate(-sensitivity, 0.0);
+
+	//if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+	//	lr = glm::clamp(lr + 0.05f, -1.f, 1.f);
+	//
+	//}
+	//else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+	//	lr = glm::clamp(lr - 0.05f, -1.f, 1.f);
+	//
+	//}
+	//else {
+	//	lr *= 0.93f;
+	//}
+	//
+	//
+	//
+	//if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+	//	lu = glm::clamp(lu + 0.05f, -1.f, 1.f);
+	//
+	//}
+	//else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+	//	lu = glm::clamp(lu - 0.05f, -1.f, 1.f);
+	//
+	//}
+	//else
+	//{
+	//	lu *= 0.93f;
+	//}
+	//camera.rotate(0.0, sensitivity * lr);
+	//camera.rotate(0.0, sensitivity * lr);
+	//camera.rotate(sensitivity * lu, 0.0);
+	//camera.rotate(sensitivity * lu, 0.0);
 }

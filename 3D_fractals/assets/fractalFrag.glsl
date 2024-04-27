@@ -139,7 +139,7 @@ void box_fold(inout vec3 z, inout float dz) {
     z = clamp(z, -mandelboxOptions.foldingLimit, mandelboxOptions.foldingLimit) * 2.0 - z;
 }
 
-float sdMandelbox(vec3 z, inout float t0) {
+float sdMandelbox(vec3 z, out float t0) {
 	//z.z = mod(z.z + 1.0, 2.0) - 1.0;
     t0 = MAX_FLOAT;
     vec3 offset = z;
@@ -161,7 +161,8 @@ float sdMandelbox(vec3 z, inout float t0) {
     return length(z) / abs(dr);
 }
 
-float sdMandelbulb(vec3 pos, float power, inout float t0) {
+float sdMandelbulb(vec3 pos, out float t0) {
+    float power = mandelbulbOptions.power;
 	vec3 z = pos;
 	float dr = 1.0;
 	float r = 0.0;
@@ -197,68 +198,94 @@ float sdBox( vec3 p, vec3 b )
   vec3 q = abs(p) - b;
   return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
 }
+float sdSphere(vec3 p, float r){
+    float displacement = sin(5.0 * p.x) * sin(5.0 * p.y) * sin(5.0 * p.z) * 0.00;
+    return length(p) - r + displacement;
+}
 
-float sdSierpinski(vec3 z, inout float t0)
+float sdPyramid( in vec3 p, in float h )
 {
-    float r;
+    float m2 = h*h + 0.25;
+    
+    // symmetry
+    p.xz = abs(p.xz); // do p=abs(p) instead for double pyramid
+    p.xz = (p.z>p.x) ? p.zx : p.xz;
+    p.xz -= 0.5;
+	
+    // project into face plane (2D)
+    vec3 q = vec3( p.z, h*p.y-0.5*p.x, h*p.x+0.5*p.y);
+        
+    float s = max(-q.x,0.0);
+    float t = clamp( (q.y-0.5*q.x)/(m2+0.25), 0.0, 1.0 );
+    
+    float a = m2*(q.x+s)*(q.x+s) + q.y*q.y;
+	float b = m2*(q.x+0.5*t)*(q.x+0.5*t) + (q.y-m2*t)*(q.y-m2*t);
+    
+    float d2 = max(-q.y,q.x*m2+q.y*0.5) < 0.0 ? 0.0 : min(a,b);
+    
+    // recover 3D and scale, and add sign
+    return sqrt( (d2+q.z*q.z)/m2 ) * sign(max(q.z,-p.y));;
+}
+
+float sdSierpinski(vec3 z, out float t0)
+{
     int n = 0;
     t0 = MAX_FLOAT;
     for (n = 0; n < fractalOptions.maxIterations; n++) {
         z*=rotateX(fractalOptions.angleA);
+
         if(z.x+z.y<0) z.xy = -z.yx;
         if(z.x+z.z<0) z.xz = -z.zx;
         if(z.y+z.z<0) z.zy = -z.yz;
-        z*=rotateX(fractalOptions.angleB);
+
+        z*=rotateY(fractalOptions.angleB);
         z = z*sierpinskiOptions.scale - sierpinskiOptions.c*(sierpinskiOptions.scale-1.0);
         t0 = min(t0, length(z));
     }
-    return (length(z) ) * pow(sierpinskiOptions.scale, -float(n));
+    return sdSphere(z,sierpinskiOptions.scale) * pow(sierpinskiOptions.scale, -float(n));
 }
 
-float sdMenger(vec3 z, inout float t0){
+float sdMenger(vec3 z, out float t0){
 
     int n = 0;
     t0 = MAX_FLOAT;
 
     for (n = 0; n < fractalOptions.maxIterations; n++) {
-      z = z*rotateY(fractalOptions.angleA);
-      z = z*rotateX(fractalOptions.angleB);
-      //folding
-      z = abs(z);
-      if(z.x<z.y) z.xy = z.yx;
-      if(z.x<z.z) z.xz = z.zx;
-      if(z.y<z.z) z.zy = z.yz;
-   
+        //z.z = mod(z.z + 1.0, 2.0) - 1.0;
+        z = z*rotateY(fractalOptions.angleA);
+        
+        //folding
+        z = abs(z);
+        if(z.x<z.y) z.xy = z.yx;
+        if(z.x<z.z) z.xz = z.zx;
+        if(z.y<z.z) z.zy = z.yz;
+
+        z = z*rotateX(fractalOptions.angleB);
     
-      z.x=mengerOptions.scale*z.x-mengerOptions.c.x*(mengerOptions.scale-1);
-      z.y=mengerOptions.scale*z.y-mengerOptions.c.y*(mengerOptions.scale-1);
-      z.z=mengerOptions.scale*z.z;
+        z.x=mengerOptions.scale*z.x-mengerOptions.c.x*(mengerOptions.scale-1);
+        z.y=mengerOptions.scale*z.y-mengerOptions.c.y*(mengerOptions.scale-1);
+        z.z=mengerOptions.scale*z.z;
    
-      if(z.z>0.5*mengerOptions.c.z*(mengerOptions.scale-1)) z.z-=mengerOptions.c.z*(mengerOptions.scale-1);
+        if(z.z>0.5*mengerOptions.c.z*(mengerOptions.scale-1)) z.z-=mengerOptions.c.z*(mengerOptions.scale-1);
    
-      t0 = min(t0, length(z));
+        t0 = min(t0, length(z));
    }
 
    return sdBox(z, mengerOptions.c)  * pow(mengerOptions.scale, -float(n));
 
 }
 
-float sdSphere(vec3 p, float r){
-    float displacement = sin(5.0 * p.x) * sin(5.0 * p.y) * sin(5.0 * p.z) * 0.00;
-    return length(p) - r + displacement;
-}
 
 float sdPlane(vec3 p, float h){
     return p.y-h;
 }
 
-float sdScene(vec3 p, inout float t0){
-    float power = 8.0;
+float sdScene(vec3 p, out float t0){
     float h = MAX_FLOAT;
 
     switch (select_fractal){
     case MANDELBULB:
-        h=min(h,sdMandelbulb(p, power, t0));
+        h=min(h,sdMandelbulb(p, t0));
         break;
     case MANDELBOX:
         h=min(h,sdMandelbox(p, t0));
@@ -364,7 +391,9 @@ bool rayMarch(Ray ray, inout HitRecord hit){
     return true;
 }
 
-
+vec3 fog(vec3 color, vec3 background, float dist){
+    return mix(color, background, 1.-exp(-rendererOptions.fogDist * dist * dist));
+}
 
 void scatter(inout Ray ray, HitRecord hit){
     ray.origin = hit.position;
@@ -398,24 +427,24 @@ void scatter(inout Ray ray, HitRecord hit){
 // ----- Renderers -----
 
 vec3 pathTrace(Ray ray){
-    vec3 backgroundColor = vec3(0.8,0.9,1.);
     Ray currentRay = ray;
     HitRecord hit;
     vec3 attenuation  = vec3(1);
-    
+    float totalDist = 0;
     for(int i = 0; i<rendererOptions.maxBounce; i++){
         if(!rayMarch(currentRay, hit)){
             vec3 col = attenuation*getSkyColor(currentRay.direction);
-            // fog is broken on path tracing
-            return mix(col, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
+            return fog(col, getSkyColor(ray.direction), totalDist);
         }
+        if(i==0)
+            totalDist = hit.dist;
         scatter(currentRay, hit);
         attenuation *= hit.color;
     }
-    if (rendererOptions.bounceBlack)
-        return vec3(0);
-    else
-        return attenuation*getSkyColor(currentRay.direction);
+    vec3 col = vec3(0);
+    if (!rendererOptions.bounceBlack)
+        col = attenuation*getSkyColor(currentRay.direction);
+    return fog(col, getSkyColor(ray.direction), totalDist);
 }
 
 vec3 blinnPhong(Ray ray){
@@ -438,7 +467,7 @@ vec3 blinnPhong(Ray ray){
 
         color = color*ambOccl;
 
-        color = mix(color, getSkyColor(ray.direction), 1.-exp(-rendererOptions.fogDist * hit.dist * hit.dist));
+        color = fog(color, getSkyColor(ray.direction), hit.dist);
     }
     
     return color;
@@ -472,6 +501,7 @@ Ray getRay(vec2 uv, vec3 origin, vec3 direction){
     vec3 offset = rd.x * right + rd.y * up;
         
     vec2 aa = hash2(g_seed)*0.001; // antialiasing
+    //vec2 aa = vec2(0); // antialiasing
 
     vec3 dir = normalize(h*(uv.x+aa.x)*right + h*(uv.y+aa.y)*up + front*focusDistance - offset);
     return Ray(origin+offset, dir);

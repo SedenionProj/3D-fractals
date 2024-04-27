@@ -32,6 +32,10 @@ struct FractalOptions {
 	float angleB;
 };
 
+struct MandelbulbOptions {
+	float power;
+};
+
 struct MandelboxOptions {
 	float fixedRadius2;
 	float minRadius2;
@@ -56,6 +60,7 @@ struct MaterialOptions {
 
 // creation
 
+MandelbulbOptions mandelbulbOptions;
 MaterialOptions materialOptions;
 MengerOptions mengerOptions;
 SierpinskiOptions sierpinskiOptions;
@@ -76,6 +81,7 @@ struct Render {
 	bool rendering;
 	bool preview;
 	char filePath[30];
+	float speed;
 };
 Render render;
 
