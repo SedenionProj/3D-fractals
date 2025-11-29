@@ -3,6 +3,7 @@
 #include <filesystem>
 #include "../assets/options.h"
 #include "shaders.h"
+#include <thread>
 
 const float PI = 3.141592;
 int frame = 0;
@@ -18,6 +19,12 @@ bool autoFocus = false;
 bool lockCamera = false;
 
 float speed = 2.5f;
+float totalDistance = 1;
+
+Shader sh;
+GLuint triangleVAO, triangleVBO;
+GLuint ssbo;
+GLuint varSsbo;
 
 void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window, float speed);
 
@@ -324,38 +331,28 @@ void drawRenderWindow() {
 	ImGui::End();
 }
 
-int main() {
-	Seden::win::init(width, height, "3D fractals");
-	Seden::win::initGui();
+void updateGui() {
 
-	defaultPresset();
-
-	Shader sh;
-	createShader(sh);
-
-	std::vector<glm::vec4> colBuf(width * height, glm::vec4(0));
-	GLuint ssbo = createSSBO(colBuf.data(),colBuf.size() * sizeof(*colBuf.data()));
-
-	float totalDistance = 1;
-	GLuint varSsbo = createSSBO(nullptr, sizeof(float));
-
+		Seden::win::clearGui();
+		ImGui::DockSpaceOverViewport(nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+		drawOptionWindow();
+		drawRenderWindow();
 	
-	GLuint triangleVAO, triangleVBO;
-	glGenVertexArrays(1, &triangleVAO);
-	glBindVertexArray(triangleVAO);
+}
 
-	sh.Bind();
-
+void loop() {
 	while (Seden::win::isRunning()) {
 		frame++;
 		oldRot = cam.getFront();
 		oldPos = cam.getPosition();
 
-		if(!lockCamera)
+		if (!lockCamera)
 			processInput(cam, Seden::win::getWindowRef(), speed * totalDistance);
 
-		Seden::win::clearGui();
+		
 		Seden::win::clear();
+
+		
 
 		// render
 
@@ -385,28 +382,25 @@ int main() {
 		glBindVertexArray(triangleVAO);
 		glDrawArrays(GL_TRIANGLES, 0, 6);
 
-		if(autoFocus)
+		if (autoFocus)
 			camera.focusDistance = totalDistance * 1.5;
+
 		
-		// GUI
-		ImGui::DockSpaceOverViewport(nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
-		
-		drawOptionWindow();
-		drawRenderWindow();
-		
-		
+		updateGui();
+
+
 		if (render.rendering) {
 			render.Sample++;
-			
+
 			if (render.Sample >= render.maxSample) {
 				render.Sample = 0;
 				render.frame++;
 				glm::vec3 pos = cam.getPosition();
 				cam.setPosition(pos + render.direction * totalDistance * 0.05f * render.speed);
 				itemChanged = true;
-				if(!render.preview)
+				if (!render.preview)
 					Seden::win::saveRecordingFrame();
-					//Seden::win::saveFrame(render.filePath+std::to_string(render.frame));
+				//Seden::win::saveFrame(render.filePath+std::to_string(render.frame));
 			}
 			if (render.frame >= render.maxFrame) {
 				cam.setPosition(render.from);
@@ -422,16 +416,45 @@ int main() {
 			Seden::win::saveRecordingFrame();
 		}
 
-		// display
 		Seden::win::drawGui();
+
+		// display
+		
 		Seden::win::display();
 	}
+}
+
+int main() {
+	Seden::win::init(width, height, "3D fractals");
+	Seden::win::initGui();
+
+	defaultPresset();
+
+	
+	createShader(sh);
+
+	std::vector<glm::vec4> colBuf(width * height, glm::vec4(0));
+	ssbo = createSSBO(colBuf.data(),colBuf.size() * sizeof(*colBuf.data()));
+
+	
+	varSsbo = createSSBO(nullptr, sizeof(float));
+
+	
+	
+	glGenVertexArrays(1, &triangleVAO);
+	glBindVertexArray(triangleVAO);
+
+	sh.Bind();
+
+	
+	loop();
 	
 	Seden::win::terminate();
 	Seden::win::terminateGui();
 }
 float lu = 0;
 float lr = 0;
+
 void processInput(Seden::PerspectiveCamera& camera, GLFWwindow* window, float speed)
 {
 	const float cameraSpeed = speed * Seden::win::getDeltaTime();
